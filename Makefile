@@ -1,4 +1,4 @@
-.PHONY: all build build-contracts build-native test bench clean print-contract-artifacts
+.PHONY: all build build-contracts build-native test bench smoke-local clean print-contract-artifacts
 
 CONTRACT_PACKAGES := schema-registry sas soroban-sas-indexer
 WASM_TARGET := wasm32-unknown-unknown
@@ -32,6 +32,9 @@ print-contract-artifacts:
 
 test:
 	cargo test --workspace
+
+smoke-local:
+	bash ./scripts/docker_smoke_test.sh
 
 bench:
 	cargo bench
