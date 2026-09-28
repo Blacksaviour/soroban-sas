@@ -192,7 +192,7 @@ The shared validation libraries enforce several key constraints:
 
 ### System Requirements
 
-- A recent stable version of the Rust toolchain (pinned to `1.79.0` via `rust-toolchain.toml`).
+- A recent stable version of the Rust toolchain (pinned to `1.83.0` via `rust-toolchain.toml`).
 - WebAssembly compilation target: `rustup target add wasm32-unknown-unknown`
 - The Stellar CLI suite: `cargo install --locked stellar-cli`
 
