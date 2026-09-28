@@ -41,7 +41,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Install stellar-cli
-        run: cargo install --locked stellar-cli --version ^22
+        run: cargo install --locked stellar-cli --version ^21
 
       - name: Start stellar-quickstart
         run: |
