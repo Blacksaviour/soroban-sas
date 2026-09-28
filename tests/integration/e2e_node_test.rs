@@ -95,29 +95,24 @@ fn run(dir: &Path, program: &str, args: &[&str]) -> String {
 /// duration of the test process (harmless in a disposable CI container).
 fn register_identity(secret: &str) -> String {
     let name = format!("integration-test-{}", std::process::id());
-    let output = Command::new(stellar_cli())
-        .args(["keys", "add", &name, "--secret-key"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .and_then(|mut child| {
-            use std::io::Write;
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(format!("{secret}\n").as_bytes())?;
-            child.wait_with_output()
+
+    // In stellar-cli v22, `stellar keys add` requires a TTY and fails from stdin.
+    // So we manually write the config TOML to bypass the bug.
+    let config_dir = std::env::var("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").expect("HOME env var not set");
+            std::path::PathBuf::from(home).join(".config")
         })
-        .expect("failed to run `stellar keys add`");
-    if !output.status.success() {
-        // Identity may already exist from a prior run in the same container.
-        eprintln!(
-            "stellar keys add warning: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
+        .join("stellar")
+        .join("identity");
+
+    std::fs::create_dir_all(&config_dir).expect("failed to create stellar identity dir");
+
+    let toml = format!("secret_key = \"{secret}\"\n");
+    std::fs::write(config_dir.join(format!("{name}.toml")), toml)
+        .expect("failed to write identity file");
+
     name
 }
 
@@ -298,10 +293,17 @@ async fn schema_registration_attest_revoke_and_indexer_lookup() {
         soroban_sdk::Address::from_string(&soroban_sdk::String::from_str(&env, &resolver_id));
     let schema_uid = SASClient::compute_schema_uid(&env, "bool verified", &resolver_address, true);
 
-    // 2. Attestation issuance: self-attest (admin is both attester and recipient).
+    // Use a different recipient — the contract rejects self-attestation
+    // (recipient == attester). Derive a second throwaway keypair from a
+    // fixed, well-known seed that is always pre-funded by the CI bootstrap.
+    let recipient_seed = "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+    let recipient = admin_address(recipient_seed);
+    fund_account(&recipient);
+
+    // 2. Attestation issuance.
     let attestation = AttestationRequestBuilder::new()
         .with_schema_uid(schema_uid.0.to_array())
-        .with_recipient(&admin)
+        .with_recipient(&recipient)
         .with_attester(&admin)
         .with_data(Bytes::from_slice(&env, b"integration test payload"))
         .build(&env)
@@ -322,11 +324,11 @@ async fn schema_registration_attest_revoke_and_indexer_lookup() {
         "freshly issued attestation must not be revoked"
     );
 
-    // 3. Indexer reverse lookup: the admin's own attestation must be
+    // 3. Indexer reverse lookup: the recipient's attestation must be
     // discoverable by recipient without knowing its UID in advance.
     let indexer_client = IndexerClient::new(indexer_id);
     let by_recipient = indexer_client
-        .get_attestations_by_recipient(&env, &rpc, &admin)
+        .get_attestations_by_recipient(&env, &rpc, &recipient)
         .expect("get_attestations_by_recipient failed");
     assert!(
         by_recipient.iter().any(|u| u.0.to_array() == uid),
@@ -434,9 +436,14 @@ async fn sac_fee_deduction_on_attest_with_value() {
     .parse()
     .unwrap_or(0);
 
+    // Use a different recipient — the contract rejects self-attestation.
+    let recipient_seed = "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+    let recipient = admin_address(recipient_seed);
+    fund_account(&recipient);
+
     let attestation = AttestationRequestBuilder::new()
         .with_schema_uid(schema_uid.0.to_array())
-        .with_recipient(&admin)
+        .with_recipient(&recipient)
         .with_attester(&admin)
         .with_data(Bytes::from_slice(&env, b"paid attestation"))
         .build(&env)
